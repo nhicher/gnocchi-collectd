@@ -1,0 +1,158 @@
+---
+- hosts: localhost
+  tasks:
+    - name: Install rdo pike and opstools repositories
+      package:
+          name: '{{ item }}'
+      with_items:
+          - centos-release-opstools
+          - centos-release-openstack-pike
+      become: true
+
+    - name: Install all packages from repositories
+      package:
+          name: '{{ item }}'
+      with_items:
+          - collectd
+          - collectd-disk
+          - collectd-python
+          - mariadb-server
+          - openstack-gnocchi-api
+          - openstack-gnocchi-metricd
+          - python-pip
+          - https://s3-us-west-2.amazonaws.com/grafana-releases/release/grafana-4.5.0-1.x86_64.rpm
+      become: true
+
+    - name: Install grafana-gnocchi datasource plugin
+      shell: 'grafana-cli plugins install gnocchixyz-gnocchi-datasource'
+      become: true
+
+    - name: Install collectd-gnocchi plugin
+      shell: 'pip install collectd-gnocchi'
+      become: true
+
+    - name: Start database
+      systemd:
+          name: mariadb
+          enabled: yes
+          state: started
+      become: true
+
+    - name: Create gnocchi db
+      mysql_db:
+          name: gnocchi
+          state: present
+      become: true
+
+    - name: Create gnocchi db user
+      mysql_user:
+          name: gnocchi
+          password: p4assw0rd
+          priv: 'gnocchi.*:ALL'
+          state: present
+      become: true
+
+    - name: Configure gnocchi
+      replace:
+          dest: /etc/gnocchi/gnocchi.conf
+          regexp: '#url = <None>'
+          replace: 'url = mysql://gnocchi:p4assw0rd@localhost/gnocchi'
+      become: true
+
+    - name: Populate gnocchi db
+      shell: gnocchi-upgrade
+      become: true
+
+    - name: Ensure /var/lib/gnocchi is owned by gnocchi user
+      file:
+          path: /var/lib/gnocchi
+          owner: gnocchi
+          group: gnocchi
+          state: directory
+          recurse: yes
+      become: true
+
+    - name: Configure gnocchi api service
+      replace:
+          dest: /usr/lib/systemd/system/openstack-gnocchi-api.service
+          regexp: 'ExecStart=.*'
+          replace: 'ExecStart=/usr/bin/gnocchi-api -p 8041 -- --log-file /var/log/gnocchi/api.log'
+      become: true
+
+    - name: Configure grafana
+      ini_file:
+          dest: /etc/grafana/grafana.ini
+          section: auth.basic
+          option: enabled
+          value: true
+      become: true
+
+    - name: Disable SELinux (config)
+      selinux:
+        state: disabled
+      become: true
+
+    - name: Disable SELinux
+      shell: 'setenforce 0'
+      become: true
+
+    #- name: Install default dashboard
+    #- copy:
+    #-   src: grafana-gnocchi-collectd.json
+    #-   dest: /usr/share/grafana/public/dashboards/home.json
+    #- become: true
+
+    - name: Start daemons
+      systemd:
+          name: '{{ item }}'
+          enabled: yes
+          state: started
+          daemon_reload: yes
+      with_items:
+          - openstack-gnocchi-api
+          - openstack-gnocchi-metricd
+          - grafana-server
+      become: true
+
+    - name: Wait for grafana db initialization
+      wait_for:
+        port: 3000
+        host: localhost
+
+    - name: Get datasources
+      uri:
+        url: http://localhost:3000/api/datasources
+        method: GET
+        user: admin
+        password: admin
+        force_basic_auth: "yes"
+      register: datasources
+
+    - name: set datasource fact
+      set_fact:
+        grafana_datasources: "{{ datasources.json | default([]) | map(attribute='name') | list }}"
+
+    - name: Configure datasource
+      uri:
+        url: http://localhost:3000/api/datasources
+        method: POST
+        user: admin
+        password: admin
+        body: '{{ grafana_data_source | to_json }}'
+        body_format: json
+        force_basic_auth: "yes"
+      when: grafana_data_source.name not in grafana_datasources
+
+    - name: Install collectd configurations files
+      synchronize:
+        src: collectd.d/
+        dest: /etc/collectd.d/
+      become: true
+
+    - name: Start collectd
+      systemd:
+          name: collectd
+          enabled: yes
+          state: started
+          daemon_reload: yes
+      become: true
