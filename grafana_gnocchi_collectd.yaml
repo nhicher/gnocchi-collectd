@@ -9,6 +9,18 @@
           - centos-release-openstack-pike
       become: true
 
+    - name: Install grafana repo
+      blockinfile:
+        dest: /etc/yum.repos.d/grafana.repo
+        create: yes
+        block: |
+          [grafana]
+          baseurl = https://packagecloud.io/grafana/stable/el/7/x86_64
+          gpgcheck = 1
+          gpgkey = https://grafanarel.s3.amazonaws.com/RPM-GPG-KEY-grafana
+          name = Grafana repository
+      become: true
+
     - name: Install all packages from repositories
       package:
           name: '{{ item }}'
@@ -20,7 +32,7 @@
           - openstack-gnocchi-api
           - openstack-gnocchi-metricd
           - python-pip
-          - https://s3-us-west-2.amazonaws.com/grafana-releases/release/grafana-4.5.0-1.x86_64.rpm
+          - grafana
       become: true
 
     - name: Install grafana-gnocchi datasource plugin
