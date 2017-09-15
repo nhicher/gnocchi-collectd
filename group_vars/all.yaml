@@ -1,0 +1,10 @@
+---
+grafana_data_source:
+  isDefault: true
+  name: gnocchi
+  type: gnocchixyz-gnocchi-datasource
+  user: admin
+  password: 'admin'
+  url: 'http://admin@localhost:8041'
+  access: proxy
+  basicAuth: true
